@@ -7,7 +7,8 @@
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:demo": "playwright test tests/example.spec.ts",
-    "report": "playwright show-report"
+    "report": "playwright show-report",
+    "queue:run": "tsx scripts/queueRunner.ts"
   },
   "keywords": [
     "playwright",
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@playwright/test": "^1.56.1",
     "@types/node": "^24.9.1",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "tsx": "^4.23.12"
   }
 }

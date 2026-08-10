@@ -1,11 +1,16 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { Reporter, TestCase, TestResult } from "@playwright/test/reporter";
-import { autoCreateRun, getConfig } from "./practitestClient";
+import { autoCreateRun, createRunForInstance, getConfig } from "./practitestClient";
 
 type PractiTestAttachment = {
   filename: string;
   content_encoded: string;
+};
+
+type QueueContext = {
+  setId: string;
+  map: Record<string, number>;
 };
 
 function toRunDuration(ms = 0): string {
@@ -17,7 +22,10 @@ function toRunDuration(ms = 0): string {
 }
 
 function getTestName(test: TestCase): string {
-  return test.titlePath().filter((part) => part && !part.endsWith(".spec.ts")).join(" ");
+  const projectName = test.parent.project()?.name;
+  return test.titlePath()
+    .filter((part) => part && !part.endsWith(".spec.ts") && part !== projectName)
+    .join(" ");
 }
 
 function getExitCode(status: TestResult["status"]): number {
@@ -52,13 +60,48 @@ function fileToAttachment(filePath: string): PractiTestAttachment | null {
   };
 }
 
+let cachedQueueContext: QueueContext | null | undefined;
+
+/** Non-null only when queueRunner.ts spawned this Playwright run (see scripts/queueRunner.ts). */
+function getQueueContext(): QueueContext | null {
+  if (cachedQueueContext !== undefined) return cachedQueueContext;
+
+  const setId = process.env.PT_QUEUE_SET_ID;
+  const mapFilePath = process.env.PT_QUEUE_MAP_FILE;
+  if (!setId || !mapFilePath) {
+    cachedQueueContext = null;
+    return cachedQueueContext;
+  }
+
+  const map = JSON.parse(fs.readFileSync(mapFilePath, "utf8"));
+  cachedQueueContext = { setId, map };
+  return cachedQueueContext;
+}
+
+function resolveInstanceId(test: TestCase, map: Record<string, number>): number | undefined {
+  const tag = test.tags.find((t) => t.startsWith("@pt-"));
+  return tag ? map[tag.slice(4)] : undefined;
+}
+
 export default class PractiTestReporter implements Reporter {
-  async onTestEnd(test: TestCase, result: TestResult) {
+  // Playwright does not guarantee onTestEnd's returned promise is fully
+  // awaited before the process exits (especially with multiple reporters
+  // registered). Track every in-flight report here and await them all in
+  // onEnd, which Playwright does wait for.
+  private pending: Promise<void>[] = [];
+
+  onTestEnd(test: TestCase, result: TestResult): void {
     if (!["passed", "failed", "timedOut", "interrupted"].includes(result.status)) {
       return;
     }
+    this.pending.push(this.reportResult(test, result));
+  }
 
-    const cfg = getConfig();
+  async onEnd(): Promise<void> {
+    await Promise.allSettled(this.pending);
+  }
+
+  private async reportResult(test: TestCase, result: TestResult): Promise<void> {
     const testName = getTestName(test);
     const attachments =
       result.status !== "passed"
@@ -68,28 +111,51 @@ export default class PractiTestReporter implements Reporter {
             .filter((attachment): attachment is PractiTestAttachment => Boolean(attachment))
         : [];
 
+    const attributes = {
+      "exit-code": getExitCode(result.status),
+      "run-duration": toRunDuration(result.duration),
+      "automated-execution-output": buildExecutionOutput(test, result),
+    };
+    const filesBlock = attachments.length > 0 ? { files: { data: attachments } } : {};
+
+    const queueContext = getQueueContext();
+    if (queueContext) {
+      const instanceId = resolveInstanceId(test, queueContext.map);
+      if (!instanceId) {
+        console.warn(`PractiTest queue mode: no instance mapping for "${testName}", skipping report.`);
+        return;
+      }
+
+      const payload = {
+        data: {
+          type: "instances",
+          attributes: { "instance-id": instanceId, ...attributes },
+          ...filesBlock,
+        },
+      };
+
+      try {
+        await createRunForInstance(payload);
+        console.log(`PractiTest run created for instance ${instanceId}: ${testName}`);
+      } catch (error) {
+        console.error(`PractiTest reporting failed for "${testName}" (instance ${instanceId}):`);
+        console.error(error);
+      }
+      return;
+    }
+
+    const cfg = getConfig();
     const payload = {
       data: {
         type: "instances",
-        attributes: {
-          "set-id": Number(cfg.setId),
-          "exit-code": getExitCode(result.status),
-          "run-duration": toRunDuration(result.duration),
-          "automated-execution-output": buildExecutionOutput(test, result),
-        },
+        attributes: { "set-id": Number(cfg.setId), ...attributes },
         "test-attributes": {
           name: testName,
           "custom-fields": {
             "---f-278185": "Automated",
           },
         },
-        ...(attachments.length > 0
-          ? {
-              files: {
-                data: attachments,
-              },
-            }
-          : {}),
+        ...filesBlock,
       },
     };
 
@@ -97,9 +163,8 @@ export default class PractiTestReporter implements Reporter {
       await autoCreateRun(payload);
       console.log(`PractiTest run created: ${testName}`);
     } catch (error) {
-      console.error("PractiTest reporting failed:");
+      console.error(`PractiTest reporting failed for "${testName}":`);
       console.error(error);
-      throw error;
     }
   }
 }

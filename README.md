@@ -94,7 +94,73 @@ Custom field keys follow the PractiTest API format `---f-{field_id}`. The value 
 
 Test names are built from Playwright's title path so they include surrounding `describe` blocks when present. This helps avoid name collisions and keeps tests traceable.
 
+## CI / GitHub Actions
+
+The included workflow (`.github/workflows/playwright.yml`) runs on every push or pull request to `main`/`master`, and can also be triggered manually.
+
+Add the following secrets to your GitHub repository (**Settings → Secrets and variables → Actions**):
+
+| Secret | Description |
+|---|---|
+| `PT_EMAIL` | Your PractiTest account email |
+| `PT_TOKEN` | Your PractiTest API token |
+| `PT_PROJECT_ID` | The numeric ID of your PractiTest project |
+| `PT_SET_ID` | The numeric ID of the Test Set to report into |
+
+## Queue-based demo (pull model)
+
+Alongside the push flow above (CI runs everything on every push), this repo also has a **pull/queue mode** where PractiTest is the orchestration layer: a tester queues a Test Set in PractiTest, and an automation worker polls, claims it, runs only the mapped tests, and reports results back into the pre-existing instances (not auto-created) — full traceability, no manual triggering. This is additive: `npm test` / the GitHub Actions workflow are unaffected.
+
+### Custom fields required
+
+| Field name | Entity | Type | Notes |
+|---|---|---|---|
+| Automation Requested | Test Set | Checkbox | Checked = eligible for automated pickup |
+| Automation Queue Status | Test Set | List | Values: `Queued`, `Claimed`, `Running`, `Completed`, `Failed` |
+| Automation ID | Test | Text | Stable identifier, matched against a Playwright test's `@pt-<id>` tag — independent of test name |
+
+> **Naming note:** this repo already has a *Test*-level field called "Automation Status" (field `278185`, see [Custom fields](#custom-fields) above, always set to `Automated`). The queue field above is deliberately named **"Automation Queue Status"** to avoid confusion — different entity, different purpose, different values.
+
+Create these in PractiTest under **Settings → Customization → Custom Fields**, then set up a saved filter over Test Sets for `Automation Requested = true AND Automation Queue Status = Queued` — this is the "automation queue" the worker polls against. Note each field's numeric ID and the filter's ID for the env vars below.
+
+### Env vars
+
+```env
+PT_QUEUE_FILTER_ID=99999
+PT_TESTSET_AUTOMATION_REQUESTED_FIELD_ID=111111
+PT_TESTSET_AUTOMATION_QUEUE_STATUS_FIELD_ID=111112
+PT_TEST_AUTOMATION_ID_FIELD_ID=111113
+```
+
+### Mapping tests
+
+The 4 tests in `tests/example.spec.ts` are tagged `@pt-home-loads`, `@pt-intentional-failure`, `@pt-public-access`, `@pt-password-security`. Set each corresponding Test's "Automation ID" field in PractiTest to the same string, minus the `@pt-` prefix (e.g. `home-loads`).
+
+### Running it
+
+```bash
+npm run queue:run
+# or target a specific Test Set directly:
+npm run queue:run -- --set-id=4721722
+```
+
+One invocation does a single find → claim → run → report → complete cycle: it finds a queued Test Set (via the saved filter, or `--set-id`), flips its status to `Claimed`, resolves each instance's Test to an Automation ID, flips status to `Running`, runs only the matching Playwright tests (`--grep`), reports each result into its existing instance via `runs.json` + `instance-id` (as opposed to `auto_create`), and flips status to `Completed`/`Failed` based on the outcome. This is a one-shot script rather than a background poller, by design — reliable to trigger and narrate live; a continuous loop is a natural next step (wrap the same logic in an interval).
+
+**Note:** the spawned Playwright process runs with `CI=1` (see `runPlaywright()` in `scripts/queueRunner.ts`) — without it, the `html` reporter opens a blocking local report server on failure and the script would hang. A side effect: `playwright.config.ts`'s `retries: process.env.CI ? 2 : 0` kicks in, so a failing test is retried and reported up to 3 times in queue mode, vs. once under a plain local `npm test`.
+
+### Key files (queue mode)
+
+**`scripts/queueRunner.ts`**
+The one-shot orchestrator described above.
+
+**`practitestClient.ts`**
+Also exports the queue-mode API functions: `findQueuedTestSets`, `getTestSet`, `updateTestSetFields`, `getInstancesForSet`, `getTest`, `createRunForInstance`.
+
+**`practitestReporter.ts`**
+When `PT_QUEUE_SET_ID`/`PT_QUEUE_MAP_FILE` are set (by `queueRunner.ts`), reports into the specific pre-existing instance via `createRunForInstance` instead of `auto_create`. Falls back to today's `auto_create` behavior otherwise — a plain `npm test` is unaffected.
+
 ## References
 
 - [PractiTest API v2 - auto_create endpoint](https://www.practitest.com/api-v2/#auto-create-a-run)
 - [Playwright custom reporters](https://playwright.dev/docs/test-reporters)
+- [Playwright test tags](https://playwright.dev/docs/test-annotations#tag-tests)
