@@ -109,7 +109,7 @@ Add the following secrets to your GitHub repository (**Settings → Secrets and 
 
 ## Queue-based demo (pull model)
 
-Alongside the push flow above (CI runs everything on every push), this repo also has a **pull/queue mode** where PractiTest is the orchestration layer: a tester queues a Test Set in PractiTest, and an automation worker polls, claims it, runs only the mapped tests, and reports results back into the pre-existing instances (not auto-created) — full traceability, no manual triggering. This is additive: `npm test` / the GitHub Actions workflow are unaffected.
+Alongside the push flow above (CI runs everything on every push), this repo also has a **pull/queue mode** where PractiTest is the orchestration layer: a tester queues a Test Set in PractiTest, and an automation worker polls, claims it, runs only the mapped tests, and reports results back into the pre-existing instances (not auto-created) - full traceability, no manual triggering. This is additive: `npm test` / the GitHub Actions workflow are unaffected.
 
 See [docs/practitest-automation-queue.md](docs/practitest-automation-queue.md) for the full design rationale behind this model. What follows here is how it's implemented (demo-scoped) in this repo.
 
@@ -119,11 +119,11 @@ See [docs/practitest-automation-queue.md](docs/practitest-automation-queue.md) f
 |---|---|---|---|
 | Automation Requested | Test Set | Checkbox | Checked = eligible for automated pickup |
 | Automation Queue Status | Test Set | List | Values: `Queued`, `Claimed`, `Running`, `Completed`, `Failed` |
-| Automation ID | Test | Text | Stable identifier, matched against a Playwright test's `@pt-<id>` tag — independent of test name |
+| Automation ID | Test | Text | Stable identifier, matched against a Playwright test's `@pt-<id>` tag - independent of test name |
 
-> **Naming note:** this repo already has a *Test*-level field called "Automation Status" (field `278185`, see [Custom fields](#custom-fields) above, always set to `Automated`). The queue field above is deliberately named **"Automation Queue Status"** to avoid confusion — different entity, different purpose, different values.
+> **Naming note:** this repo already has a *Test*-level field called "Automation Status" (field `278185`, see [Custom fields](#custom-fields) above, always set to `Automated`). The queue field above is deliberately named **"Automation Queue Status"** to avoid confusion - different entity, different purpose, different values.
 
-Create these in PractiTest under **Settings → Customization → Custom Fields**, then set up a saved filter over Test Sets for `Automation Requested = true AND Automation Queue Status = Queued` — this is the "automation queue" the worker polls against. Note each field's numeric ID and the filter's ID for the env vars below.
+Create these in PractiTest under **Settings → Customization → Custom Fields**, then set up a saved filter over Test Sets for `Automation Requested = true AND Automation Queue Status = Queued` - this is the "automation queue" the worker polls against. Note each field's numeric ID and the filter's ID for the env vars below.
 
 ### Env vars
 
@@ -146,9 +146,9 @@ npm run queue:run
 npm run queue:run -- --set-id=4721722
 ```
 
-One invocation does a single find → claim → run → report → complete cycle: it finds a queued Test Set (via the saved filter, or `--set-id`), flips its status to `Claimed`, resolves each instance's Test to an Automation ID, flips status to `Running`, runs only the matching Playwright tests (`--grep`), reports each result into its existing instance via `runs.json` + `instance-id` (as opposed to `auto_create`), and flips status to `Completed`/`Failed` based on the outcome. This is a one-shot script rather than a background poller, by design — reliable to trigger and narrate live; a continuous loop is a natural next step (wrap the same logic in an interval).
+One invocation does a single find → claim → run → report → complete cycle: it finds a queued Test Set (via the saved filter, or `--set-id`), flips its status to `Claimed`, resolves each instance's Test to an Automation ID, flips status to `Running`, runs only the matching Playwright tests (`--grep`), reports each result into its existing instance via `runs.json` + `instance-id` (as opposed to `auto_create`), and flips status to `Completed`/`Failed` based on the outcome. This is a one-shot script rather than a background poller, by design - reliable to trigger and narrate live; a continuous loop is a natural next step (wrap the same logic in an interval).
 
-**Note:** the spawned Playwright process runs with `CI=1` (see `runPlaywright()` in `scripts/queueRunner.ts`) — without it, the `html` reporter opens a blocking local report server on failure and the script would hang. A side effect: `playwright.config.ts`'s `retries: process.env.CI ? 2 : 0` kicks in, so a failing test is retried and reported up to 3 times in queue mode, vs. once under a plain local `npm test`.
+**Note:** the spawned Playwright process runs with `CI=1` (see `runPlaywright()` in `scripts/queueRunner.ts`) - without it, the `html` reporter opens a blocking local report server on failure and the script would hang. A side effect: `playwright.config.ts`'s `retries: process.env.CI ? 2 : 0` kicks in, so a failing test is retried and reported up to 3 times in queue mode, vs. once under a plain local `npm test`.
 
 ### Key files (queue mode)
 
@@ -159,7 +159,7 @@ The one-shot orchestrator described above.
 Also exports the queue-mode API functions: `findQueuedTestSets`, `getTestSet`, `updateTestSetFields`, `getInstancesForSet`, `getTest`, `createRunForInstance`.
 
 **`practitestReporter.ts`**
-When `PT_QUEUE_SET_ID`/`PT_QUEUE_MAP_FILE` are set (by `queueRunner.ts`), reports into the specific pre-existing instance via `createRunForInstance` instead of `auto_create`. Falls back to today's `auto_create` behavior otherwise — a plain `npm test` is unaffected.
+When `PT_QUEUE_SET_ID`/`PT_QUEUE_MAP_FILE` are set (by `queueRunner.ts`), it reports into the specific pre-existing instance via `createRunForInstance` instead of `auto_create`. Without those variables set, it uses the original `auto_create` behavior, so a plain `npm test` is unaffected.
 
 ## References
 
