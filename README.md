@@ -111,6 +111,8 @@ Add the following secrets to your GitHub repository (**Settings → Secrets and 
 
 Alongside the push flow above (CI runs everything on every push), this repo also has a **pull/queue mode** where PractiTest is the orchestration layer: a tester queues a Test Set in PractiTest, and an automation worker polls, claims it, runs only the mapped tests, and reports results back into the pre-existing instances (not auto-created) — full traceability, no manual triggering. This is additive: `npm test` / the GitHub Actions workflow are unaffected.
 
+See [docs/practitest-automation-queue.md](docs/practitest-automation-queue.md) for the full design rationale behind this model. What follows here is how it's implemented (demo-scoped) in this repo.
+
 ### Custom fields required
 
 | Field name | Entity | Type | Notes |
