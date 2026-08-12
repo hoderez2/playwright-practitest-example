@@ -1,3 +1,13 @@
+// Playwright custom reporter: runs after every test and reports the result to
+// PractiTest. It supports two modes, decided per-run by getQueueContext():
+//
+//  - Push mode (default): used by a plain `npm test` / the GitHub Actions
+//    workflow. Reports via autoCreateRun(), which creates the Test/Instance/Run
+//    in cfg.setId on the fly if they don't already exist.
+//  - Queue mode: used when scripts/queueRunner.ts spawns this Playwright run.
+//    It sets PT_QUEUE_SET_ID / PT_QUEUE_MAP_FILE so this reporter instead
+//    reports each result into a specific, already-existing PractiTest Instance
+//    via createRunForInstance() - see README's "Queue-based demo" section.
 import * as fs from "fs";
 import * as path from "path";
 import type { Reporter, TestCase, TestResult } from "@playwright/test/reporter";
@@ -21,6 +31,9 @@ function toRunDuration(ms = 0): string {
   return `${hours}:${minutes}:${seconds}`;
 }
 
+// Builds a readable PractiTest test name from Playwright's describe/test title
+// path, e.g. "PractiTest Demo Homepage loads". Drops the spec filename and the
+// project name (e.g. "chromium") since neither is meaningful in PractiTest.
 function getTestName(test: TestCase): string {
   const projectName = test.parent.project()?.name;
   return test.titlePath()
@@ -73,11 +86,16 @@ function getQueueContext(): QueueContext | null {
     return cachedQueueContext;
   }
 
+  // queueRunner.ts writes this file before spawning Playwright: a JSON map of
+  // automationId -> instanceId for every test it resolved. It's how the
+  // instance-id map crosses the process boundary into this reporter.
   const map = JSON.parse(fs.readFileSync(mapFilePath, "utf8"));
   cachedQueueContext = { setId, map };
   return cachedQueueContext;
 }
 
+// Playwright tests are tagged `@pt-<automationId>` (see tests/example.spec.ts).
+// This finds that tag and looks up the matching instance id from the queue map.
 function resolveInstanceId(test: TestCase, map: Record<string, number>): number | undefined {
   const tag = test.tags.find((t) => t.startsWith("@pt-"));
   return tag ? map[tag.slice(4)] : undefined;
@@ -91,6 +109,8 @@ export default class PractiTestReporter implements Reporter {
   private pending: Promise<void>[] = [];
 
   onTestEnd(test: TestCase, result: TestResult): void {
+    // "skipped" (and any other status) isn't a real execution outcome worth
+    // reporting to PractiTest.
     if (!["passed", "failed", "timedOut", "interrupted"].includes(result.status)) {
       return;
     }
@@ -103,6 +123,8 @@ export default class PractiTestReporter implements Reporter {
 
   private async reportResult(test: TestCase, result: TestResult): Promise<void> {
     const testName = getTestName(test);
+    // Screenshots (and, on retry, trace files) are only attached for non-passing
+    // results - no point sending evidence for a test that just passed.
     const attachments =
       result.status !== "passed"
         ? result.attachments
@@ -120,8 +142,13 @@ export default class PractiTestReporter implements Reporter {
 
     const queueContext = getQueueContext();
     if (queueContext) {
+      // Queue mode: report into the specific instance queueRunner.ts already
+      // resolved for this test, instead of auto-creating a new one.
       const instanceId = resolveInstanceId(test, queueContext.map);
       if (!instanceId) {
+        // Can happen if the config-level grep filter (playwright.config.ts's
+        // queueGrep()) matched a test with no corresponding queue-map entry.
+        // Log and move on rather than failing the whole run over it.
         console.warn(`PractiTest queue mode: no instance mapping for "${testName}", skipping report.`);
         return;
       }
@@ -138,12 +165,16 @@ export default class PractiTestReporter implements Reporter {
         await createRunForInstance(payload);
         console.log(`PractiTest run created for instance ${instanceId}: ${testName}`);
       } catch (error) {
+        // Deliberately not re-thrown: one failed report call shouldn't abort
+        // the rest of the run (see commit history / README for the retries=2
+        // + multi-reporter case this was guarding against).
         console.error(`PractiTest reporting failed for "${testName}" (instance ${instanceId}):`);
         console.error(error);
       }
       return;
     }
 
+    // Push mode (default): auto-create the Test/Instance/Run in cfg.setId.
     const cfg = getConfig();
     const payload = {
       data: {
@@ -152,7 +183,7 @@ export default class PractiTestReporter implements Reporter {
         "test-attributes": {
           name: testName,
           "custom-fields": {
-            "---f-278185": "Automated",
+            "---f-278185": "Automated", // "Automation Status" field on the Test entity.
           },
         },
         ...filesBlock,
