@@ -125,7 +125,7 @@ See [docs/practitest-automation-queue.md](docs/practitest-automation-queue.md) f
 
 > **Naming note:** this repo already has a *Test*-level field called "Automation Status" (field `278185`, see [Custom fields](#custom-fields) above, always set to `Automated`). The queue field above is deliberately named **"Automation Queue Status"** to avoid confusion - different entity, different purpose, different values.
 
-Create these in PractiTest under **Settings → Customization → Custom Fields**, then set up a saved filter over Test Sets for `Automation Requested = true AND Automation Queue Status = Queued` - this is the "automation queue" the worker polls against. Note each field's numeric ID and the filter's ID for the env vars below.
+Create these in PractiTest under **Project Settings → Fields → Custom Fields**, then set up a saved filter over Test Sets for `Automation Requested = true AND Automation Queue Status = Queued` - this is the "automation queue" the worker polls against. Note each field's numeric ID and the filter's ID for the env vars below.
 
 ### Env vars
 
