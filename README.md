@@ -2,6 +2,8 @@
 
 This project shows how to run Playwright tests and report the results to PractiTest using the `auto_create` API endpoint.
 
+It also includes a second, opt-in mode where PractiTest drives the automation as a queue instead - see [Queue-based demo (pull model)](#queue-based-demo-pull-model) further down.
+
 ## What this example does
 
 - Runs Playwright tests from the command line
