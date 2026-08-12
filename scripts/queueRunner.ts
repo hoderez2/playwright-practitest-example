@@ -14,6 +14,11 @@
 //      length limits, which a `--grep` CLI arg would eventually hit at scale).
 //   5. Report results back into the existing instances (practitestReporter.ts
 //      does this, in "queue mode"), then mark the set Completed/Failed.
+//      Completed/Failed here tracks whether the ORCHESTRATION succeeded, not
+//      whether the tests passed - a run where every test failed is still
+//      "Completed" as long as it ran and reported; individual pass/fail is
+//      already visible per-instance. "Failed" is reserved for the run itself
+//      breaking (couldn't fetch instances, no automation-ID matches, etc.).
 //
 // This is intentionally one-shot rather than a background poller - reliable
 // to trigger and narrate live for a demo. A continuous loop is a natural
@@ -161,47 +166,65 @@ async function main(): Promise<void> {
   await updateTestSetFields(setId, { [statusField]: "Claimed" });
   console.log("Test Set status: Queued -> Claimed");
 
-  // --- Step 3: resolve which Playwright tests this set maps to ---
-  console.log("Fetching instances...");
-  const instances = await getInstancesForSet(setId);
-  const map = await buildAutomationIdMap(instances, queueCfg);
-  const mappedCount = Object.keys(map).length;
-  console.log(
-    `Resolved ${mappedCount}/${instances.length} tests to automation IDs: ${Object.keys(map).join(", ") || "none"}`
-  );
+  // Everything from here on is wrapped so that any failure in the
+  // orchestration itself (as opposed to an individual test assertion
+  // failing, which is a normal outcome, not an error) reliably marks the
+  // set Failed instead of leaving it stuck in Claimed/Running forever.
+  try {
+    // --- Step 3: resolve which Playwright tests this set maps to ---
+    console.log("Fetching instances...");
+    const instances = await getInstancesForSet(setId);
+    const map = await buildAutomationIdMap(instances, queueCfg);
+    const mappedCount = Object.keys(map).length;
+    console.log(
+      `Resolved ${mappedCount}/${instances.length} tests to automation IDs: ${Object.keys(map).join(", ") || "none"}`
+    );
 
-  if (mappedCount === 0) {
-    // Nothing to run - likely a missing/blank "Automation ID" field on every
-    // Test in the set. Mark Failed rather than leaving it stuck in Claimed.
-    await updateTestSetFields(setId, { [statusField]: "Failed" });
-    console.error("No tests in this set had a matching Automation ID. Marked Failed.");
+    if (mappedCount === 0) {
+      // Nothing to run - likely a missing/blank "Automation ID" field on every
+      // Test in the set. Mark Failed rather than leaving it stuck in Claimed.
+      await updateTestSetFields(setId, { [statusField]: "Failed" });
+      console.error("No tests in this set had a matching Automation ID. Marked Failed.");
+      process.exit(1);
+    }
+
+    // --- Step 4: run ---
+    await updateTestSetFields(setId, { [statusField]: "Running" });
+    console.log("Test Set status: Claimed -> Running");
+
+    const mapFilePath = writeMapFile(map);
+    console.log(`Running: npx playwright test (filtered to ${mappedCount} mapped tests via playwright.config.ts)`);
+
+    let exitCode = 1;
+    try {
+      exitCode = await runPlaywright({
+        PT_QUEUE_SET_ID: String(setId),
+        PT_QUEUE_MAP_FILE: mapFilePath,
+      });
+    } finally {
+      fs.rmSync(mapFilePath, { force: true });
+    }
+
+    // --- Step 5: report was handled by practitestReporter.ts during the run.
+    // Reaching here means Playwright actually ran and reported results -
+    // exitCode reflects individual test outcomes (already visible per-instance
+    // in PractiTest), not whether the orchestration itself worked. So this is
+    // "Completed" either way; a genuinely broken run is caught below instead. ---
+    await updateTestSetFields(setId, { [statusField]: "Completed" });
+    console.log(
+      `Test Set status: Running -> Completed (${exitCode === 0 ? "all tests passed" : "some tests failed - see individual instances"})`
+    );
+
+    process.exit(exitCode);
+  } catch (error) {
+    // Anything that throws after claiming means the orchestration itself
+    // broke (couldn't fetch instances, Playwright failed to launch, etc.) -
+    // distinct from a test assertion failing, which is handled above instead.
+    await updateTestSetFields(setId, { [statusField]: "Failed" }).catch(() => {});
+    console.error("Queue runner failed after claiming the test set:");
+    console.error(error);
     process.exit(1);
   }
-
-  // --- Step 4: run ---
-  await updateTestSetFields(setId, { [statusField]: "Running" });
-  console.log("Test Set status: Claimed -> Running");
-
-  const mapFilePath = writeMapFile(map);
-  console.log(`Running: npx playwright test (filtered to ${mappedCount} mapped tests via playwright.config.ts)`);
-
-  let exitCode = 1;
-  try {
-    exitCode = await runPlaywright({
-      PT_QUEUE_SET_ID: String(setId),
-      PT_QUEUE_MAP_FILE: mapFilePath,
-    });
-  } finally {
-    fs.rmSync(mapFilePath, { force: true });
-  }
-
-  // --- Step 5: report was handled by practitestReporter.ts during the run;
-  // just mark the set's final state here ---
-  const finalStatus = exitCode === 0 ? "Completed" : "Failed";
-  await updateTestSetFields(setId, { [statusField]: finalStatus });
-  console.log(`Test Set status: Running -> ${finalStatus}`);
-
-  process.exit(exitCode);
 }
 
 main().catch((error) => {
