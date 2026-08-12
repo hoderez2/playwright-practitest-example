@@ -39,7 +39,11 @@ export default defineConfig({
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
   reporter: [
     ['junit', { outputFile: 'test-results/playwright-results.xml' }],
-    ['html'],
+    // open: 'never' - without it, the html reporter opens a blocking local
+    // report server on failure when not running under CI, which would hang
+    // scripts/queueRunner.ts (a one-shot script that needs the process to
+    // actually exit when the test run finishes).
+    ['html', { open: 'never' }],
     ['./practitestReporter']
   ],
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */

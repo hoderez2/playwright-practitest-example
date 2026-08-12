@@ -166,8 +166,9 @@ export default class PractiTestReporter implements Reporter {
         console.log(`PractiTest run created for instance ${instanceId}: ${testName}`);
       } catch (error) {
         // Deliberately not re-thrown: one failed report call shouldn't abort
-        // the rest of the run (see commit history / README for the retries=2
-        // + multi-reporter case this was guarding against).
+        // the rest of the run. Matters most when retries are enabled (real CI
+        // sets `retries: 2` in playwright.config.ts), since a persistently
+        // failing test then triggers this call multiple times in a row.
         console.error(`PractiTest reporting failed for "${testName}" (instance ${instanceId}):`);
         console.error(error);
       }

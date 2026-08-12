@@ -152,7 +152,7 @@ One invocation does a single find → claim → run → report → complete cycl
 
 **Test filtering:** which tests run is decided by `playwright.config.ts`'s `grep` option, not a `--grep` CLI flag. `queueRunner.ts` writes the automationId → instanceId map to a temp file and passes its path via `PT_QUEUE_MAP_FILE`; `playwright.config.ts`'s `queueGrep()` reads that file at config-load time and builds the filter `RegExp` in-process. This matters at scale: a `--grep` value built from hundreds or thousands of automation IDs can hit OS command-line length limits (Windows caps a process's command line around 32K characters), while building the same `RegExp` in-process has no such limit.
 
-**Note:** the spawned Playwright process runs with `CI=1` (see `runPlaywright()` in `scripts/queueRunner.ts`) - without it, the `html` reporter opens a blocking local report server on failure and the script would hang. A side effect: `playwright.config.ts`'s `retries: process.env.CI ? 2 : 0` kicks in, so a failing test is retried and reported up to 3 times in queue mode, vs. once under a plain local `npm test`.
+**Note:** the `html` reporter is configured with `open: 'never'` in `playwright.config.ts`, so it never opens a blocking local report server on failure - this used to be worked around by forcing `CI=1` on the spawned process, which had the unwanted side effect of also enabling `playwright.config.ts`'s `retries: 2` and forcing `workers: 1` (sequential execution) under CI. Fixing the reporter directly means `queue:run` now runs with real parallelism and the same retry behavior as `npm test`, rather than an artificially CI-like environment.
 
 ### Key files (queue mode)
 

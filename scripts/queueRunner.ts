@@ -139,11 +139,7 @@ function runPlaywright(extraEnv: Record<string, string>): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawn("npx", ["playwright", "test"], {
       stdio: "inherit",
-      // Force CI-like behavior: without it, Playwright's HTML reporter opens a
-      // blocking local report server on failure, which would hang this script.
-      // Side effect: playwright.config.ts's `retries: process.env.CI ? 2 : 0`
-      // also kicks in under this flag (see README's queue-mode note).
-      env: { ...process.env, CI: "1", ...extraEnv },
+      env: { ...process.env, ...extraEnv },
     });
     child.on("error", reject);
     child.on("exit", (code) => resolve(code ?? 1));
